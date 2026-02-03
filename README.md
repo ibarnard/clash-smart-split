@@ -26,6 +26,7 @@
 
 1.  **复制脚本代码**：
     打开本仓库的 `smart-split.js` 文件，或者 [点击这里复制完整代码](#)。
+    或直接复制链接，点击导入：https://github.com/ibarnard/clash-smart-split/blob/main/smart-split.js
 
 2.  **新建脚本**：
     *   打开 Clash Verge/Party 客户端。
