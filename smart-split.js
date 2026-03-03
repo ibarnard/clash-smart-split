@@ -1,16 +1,16 @@
 /**
  * Clash Verge / Clash Party 智能分流覆写脚本
  * 
- * =======================================================
- * 📝 脚本功能介绍：
- * 1. 【节点清洗】彻底移除不可用、倍率异常、广告推广等垃圾节点。
- * 2. 【智能分组】为 AI、流媒体建立“专用/媒体自动”组，确保走最稳的节点。
- * 3. 【省流模式】强制将机场默认的“自动选择”调整为 60分钟测速 (默认通常是 5-10分钟，浪费流量)。
- * 4. 【规则注入】
- *    - 直连网址 -> DIRECT (优先级最高)
- *    - 专用网址 -> 专用自动组 (优先级第二)
- *    - 其他 -> 默认规则
- * =======================================================
+ * 脚本功能：
+ * 1. 节点清洗 - 移除不可用、倍率异常、广告推广等垃圾节点
+ * 2. 智能分组 - 为 AI、流媒体建立专用自动组
+ * 3. 省流模式 - 强制机场默认自动选择调整为 60分钟测速
+ * 4. 规则注入 - 直连规则(端口/IP) > 专用规则 > 默认规则
+ * 
+ * TUN模式SSH直连解决方案：
+ * - 新增 directSSHIPs 配置SSH服务器IP/网段
+ * - 新增 directPorts 配置直连端口(默认22)
+ * - 规则优先级：端口直连 > IP直连 > 域名直连 > 专用规则
  */
 
 function main(config) {
@@ -33,9 +33,22 @@ function main(config) {
     specialGroupName: "🚀 专用/媒体自动", // 你新建的那个专用组名字
     generalGroupName: "自动选择",         // 机场原本的默认自动组 (脚本会自动识别并改造它)
 
-    // 4. 【直连网址 (白名单)】
+    // 4. 【直连端口】
+    // 作用：列表内的端口，强制不走代理，直接连接。
+    // 理由：解决TUN模式下特定端口流量被代理的问题(如SSH 22端口)。
+    directPorts: [22],
+
+    // 5. 【直连IP/网段】
+    // 作用：列表内的IP或CIDR网段，强制不走代理，直接连接。
+    // 理由：解决TUN模式下SSH服务器IP直连失效问题。
+    directSSHIPs: [
+      // "192.168.1.100",   // 单个IP地址
+      // "10.0.0.0/8",      // CIDR网段格式
+    ],
+
+    // 6. 【直连网址 (白名单)】
     // 作用：列表内的域名，强制不走代理，直接连接。
-    // 理由：国内网站走代理反而变慢，或者为了解决某些应用在代理下无法使用的问题。
+    // 理由：国内网站走代理反而变慢，或解决某些应用在代理下无法使用的问题。
     directDomains: [
       "baidu.com", 
       "qq.com", 
@@ -47,7 +60,7 @@ function main(config) {
       "apple.com"        // 苹果服务
     ],
 
-    // 5. 【专用网址 (强制定向)】
+    // 7. 【专用网址 (强制定向)】
     // 作用：列表内的域名，强制走上面的 "🚀 专用/媒体自动" 组。
     // 理由：确保 AI 和流媒体服务始终走最优质的特定国家节点，防止被分配到乱七八糟的慢节点。
     specialDomains: [
@@ -145,26 +158,76 @@ function main(config) {
   }
 
   // --- 4. 规则注入 (Rules Injection) ---
-  // 逻辑顺序：直连规则 > 专用规则 > 原始规则
+  // 优先级顺序：端口直连 > IP直连 > 域名直连 > 专用规则 > 原始规则
+  // 使用 unshift 将新规则添加到数组最前端，确保最高优先级
   
   const newRules = [];
 
-  // 4.1 注入直连规则 (最高优先级)
+  // 4.1 端口直连规则 (最高优先级 - TUN模式下优先匹配端口)
+  UserConfig.directPorts.forEach(port => {
+    newRules.push(`DST-PORT,${port},DIRECT`);
+  });
+
+  // 4.2 IP/网段直连规则 (次优先级)
+  // 自动检测IP格式：纯IP自动补/32，CIDR网段直接使用
+  UserConfig.directSSHIPs.forEach(ipOrCidr => {
+    const trimmed = ipOrCidr.trim();
+    if (!trimmed) return;
+    
+    // 判断是否为CIDR格式(包含/)
+    if (trimmed.includes('/')) {
+      newRules.push(`IP-CIDR,${trimmed},DIRECT`);
+    } else {
+      // 纯IP地址，自动补全/32
+      newRules.push(`IP-CIDR,${trimmed}/32,DIRECT`);
+    }
+  });
+
+  // 4.3 域名直连规则 (第三优先级)
   UserConfig.directDomains.forEach(domain => {
     newRules.push(`DOMAIN-SUFFIX,${domain},DIRECT`);
   });
 
-  // 4.2 注入专用规则 (次高优先级)
+  // 4.4 专用规则 (第四优先级)
   if (specialNodes.length > 0) {
     UserConfig.specialDomains.forEach(domain => {
       newRules.push(`DOMAIN-SUFFIX,${domain},${UserConfig.specialGroupName}`);
     });
   }
 
-  // 4.3 将新规则合并到原始规则的最前面
+  // 4.5 将新规则合并到原始规则的最前面
   if (newRules.length > 0) {
     config.rules.unshift(...newRules);
   }
 
   return config;
 }
+
+/**
+ * =======================================================
+ * 修改点说明 (TUN模式SSH直连修复)
+ * =======================================================
+ * 
+ * 【新增配置项】
+ * 1. directPorts - 直连端口数组，默认[22]，可添加其他端口
+ * 2. directSSHIPs - SSH服务器IP/网段数组，支持IP或CIDR格式
+ * 
+ * 【规则注入优先级】
+ * 第1优先级：DST-PORT规则 (端口直连)
+ * 第2优先级：IP-CIDR规则 (IP/网段直连)  
+ * 第3优先级：DOMAIN-SUFFIX规则 (域名直连)
+ * 第4优先级：专用规则 (强制走专用组)
+ * 
+ * 【关键代码变更】
+ * 1. 规则顺序调整为：端口 > IP > 域名 > 专用
+ * 2. IP格式自动处理：纯IP自动补/32后缀
+ * 3. 所有新规则通过unshift添加到rules数组最前端
+ * 
+ * 【使用示例】
+ * directSSHIPs: [
+ *   "192.168.1.100",      // 单个IP
+ *   "10.0.0.0/8",         // CIDR网段
+ *   "172.16.0.0/12"       // 另一个网段
+ * ]
+ * directPorts: [22, 2222] // SSH端口
+ */
